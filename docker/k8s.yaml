@@ -1,0 +1,102 @@
+kind: CronJob
+apiVersion: batch/v1beta1
+metadata:
+  name: ${SERVICE_NAME}
+  namespace: xn
+  labels:
+    app: ${SERVICE_NAME}
+spec:
+  schedule: '13 13 * * *'
+  concurrencyPolicy: Forbid
+  suspend: false
+  jobTemplate:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: ${SERVICE_NAME}
+    spec:
+      parallelism: 1
+      completions: 1
+      activeDeadlineSeconds: 3600
+      backoffLimit: 1
+      template:
+        metadata:
+          creationTimestamp: null
+        spec:
+          volumes:
+            - name: host-time
+              hostPath:
+                path: /etc/localtime
+                type: ''
+            - name: volume-m7s3ju
+              persistentVolumeClaim:
+                claimName: weather-reference-job-data
+            - name: volume-aaaaaaa
+              configMap:
+                name: weather-reference-grasp-job-conf
+                defaultMode: 420
+          containers:
+            - name: container-ml1aa7
+              image: ${DOCKER_IMAGE_URL}
+              resources: {}
+              volumeMounts:
+                - name: host-time
+                  readOnly: true
+                  mountPath: /etc/localtime
+                - name: volume-m7s3ju
+                  mountPath: /weather_reference
+                - name: volume-aaaaaaa
+                  readOnly: true
+                  mountPath: /home/config.json
+                  subPath: config.json
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              imagePullPolicy: IfNotPresent
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 30
+          dnsPolicy: ClusterFirst
+          serviceAccountName: default
+          serviceAccount: default
+          securityContext: {}
+          schedulerName: default-scheduler
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
+---
+
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: weather-reference-grasp-job-conf
+  namespace: ${PROJECT_NAME}
+data:
+  config.json: |
+    {
+        "postgresql":{
+            "postgresql_user":"wangwuli",
+            "postgresql_password":"wangwuli",
+            "postgresql_host":"postgresql-ha-pgpool.base",
+            "postgresql_port":5432,
+            "postgresql_dbname":"test"
+        },
+        "crawler_path":"/weather_reference/"
+    }
+
+
+---
+
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: weather-reference-job-data
+  namespace: ${PROJECT_NAME}
+  finalizers:
+    - kubernetes.io/pvc-protection
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local
+  volumeMode: Filesystem

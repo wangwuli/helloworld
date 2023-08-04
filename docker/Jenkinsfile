@@ -1,0 +1,104 @@
+pipeline {
+  
+  parameters {
+    choice(
+      description: '环境',
+      name: 'ENV',
+      choices: [ 'dev','sit','uat','pre','prd' ]
+    )
+  }
+  
+  environment {
+    // 项目名称 在各个企业空间下创建 对应项目 dev-sumztech sit-sumztech uat-sumztech
+    PROJECT_NAME = "test"
+    // 服务名称：规范 服务名称-[front|service] front前端 service后端
+    SERVICE_NAME = "service-${MODULE_NAME}"
+
+    DOCKER_CREDENTIALS_ID = 'harbor'
+    // k8s授权id
+    K8S_CREDENTIALS_ID = "kube-config-${ENV}"
+    // ----------- 以下配置一般情况不修改 ------------
+    // Docker镜像仓库地址
+    DOCKER_HUB_URL = 'hub.docker.com:100'
+    // Docker镜像仓库地址
+    DOCKER_HUB_NAMESPACE = 'wangwuli'
+    // docker镜像地址
+    DOCKER_IMAGE_URL = "${DOCKER_HUB_URL}/${DOCKER_HUB_NAMESPACE}/${PROJECT_NAME}/${SERVICE_NAME}-${GIT_BRANCH}:${BUILD_TAG}"
+  }
+
+  stages {
+
+    // 输出所有Jenkins环境变量
+    stage('env') {
+      agent any
+      steps {
+        sh 'env'
+      }
+    }
+
+    // 代码构建
+    stage('install & build') {
+      agent none
+      steps {
+        container('maven') {
+          sh '''
+            cp -r docker ${MODULE_NAME}/
+            mvn clean package -U -Dmaven.test.skip=true  -P $ENV package -X -pl ${MODULE_NAME} -am
+            cp ${MODULE_NAME}/target/${MODULE_NAME}.jar ${MODULE_NAME}/docker/app.jar
+          '''
+        }
+      }
+    }
+
+    // docker 构建、推送
+    stage('docker build & push') {
+      agent none
+      steps {
+        container('docker') {
+          withCredentials([usernamePassword(credentialsId : DOCKER_CREDENTIALS_ID ,passwordVariable : 'HUB_REG_PASSWORD' ,usernameVariable : 'HUB_REG_NAME' ,)]) {
+            sh 'echo "$HUB_REG_PASSWORD" | docker login $DOCKER_HUB_URL -u "$HUB_REG_NAME" --password-stdin'
+          }
+          sh '''
+          docker build -t $DOCKER_IMAGE_URL -f ${MODULE_NAME}/docker/Dockerfile ${MODULE_NAME}/docker
+          docker push $DOCKER_IMAGE_URL
+          '''
+        }
+      }
+    }
+
+    // 部署
+    stage('k8s deploy') {
+      agent none
+      steps {  
+          script {
+            // 设置SECRET_NAME的值
+            def secretName = ${K8S_CREDENTIALS_ID}
+            def mountPath = '/my-kube-config'
+
+                // 调用Pod模板
+            podTemplate(
+                containers: [
+                    containerTemplate(
+                        name: 'kubectl-container',
+                        image: 'bitnami/kubectl',
+                        command: '',
+                        volumes: [
+                            secretVolume(secretName: secretName, mountPath: mountPath)
+                        ],
+                        envVars: [
+                            envVar(key: 'KUBECONFIG', value: mountPath)
+                        ]
+                    )
+                ]
+              ) {
+                  // 在Pod中运行的命令
+                  container('kubectl-container') {
+                    sh "envsubst < ${MODULE_NAME}/docker/k8s.yaml | kubectl apply -f -"
+                }
+              }
+           }
+        }
+     }
+  }
+}
+
